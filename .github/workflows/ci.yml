@@ -132,3 +132,35 @@ jobs:
             grep -E 'digest: sha256:' "push-$tag.log"
           done
           echo "Published from commit $GITHUB_SHA"
+
+  deploy:
+    name: deploy
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, devops-vm]
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    concurrency:
+      group: deploy-devops-vm
+      cancel-in-progress: false
+    env:
+      VM_HOST: 192.168.56.101
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Deploy with Ansible
+        working-directory: ansible
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
+          ansible-playbook site.yml --extra-vars "app_tag=$GITHUB_SHA"
+
+      - name: Check through Nginx
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 10 "http://$VM_HOST/health" |
+            python3 -c 'import json, sys; body = json.load(sys.stdin); assert body.get("status") == "ok", body; print(json.dumps(body))'
